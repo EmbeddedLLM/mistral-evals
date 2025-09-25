@@ -53,25 +53,57 @@ class Eval(ABC):
         """Loads dataset and applies transforms to get chat completion requests."""
         raise NotImplementedError
 
-    def get_responses(self, model: Model):
-        """Queries model to get responses for each interaction."""
+    # def get_responses(self, model: Model):
+    #     """Queries model to get responses for each interaction."""
 
-        futures: dict[Future, Interaction] = {}
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            for interaction in self.interactions:
-                request = copy.deepcopy(interaction.request)
-                futures[executor.submit(model, request)] = interaction
+    #     futures: dict[Future, Interaction] = {}
+    #     with ThreadPoolExecutor(max_workers=8) as executor:
+    #         for interaction in self.interactions:
+    #             request = copy.deepcopy(interaction.request)
+    #             futures[executor.submit(model, request)] = interaction
 
-            interactions_w_model_ans = []
-            for future in tqdm(
-                as_completed(futures),
-                total=len(self.interactions),
-                desc="Querying model",
-            ):
-                interaction = futures[future]
-                interaction.model_answer = future.result()
-                interactions_w_model_ans.append(interaction)
-            self.interactions = interactions_w_model_ans
+    #         interactions_w_model_ans = []
+    #         for future in tqdm(
+    #             as_completed(futures),
+    #             total=len(self.interactions),
+    #             desc="Querying model",
+    #         ):
+    #             interaction = futures[future]
+    #             interaction.model_answer = future.result()
+    #             interactions_w_model_ans.append(interaction)
+    #         self.interactions = interactions_w_model_ans
+
+    def get_responses(self, model: Model, batch_size: int = 32):
+        """Queries model to get responses for each interaction in batches."""
+        all_interactions_with_answers = []
+        
+        # Process interactions in batches
+        for i in tqdm(range(0, len(self.interactions), batch_size), desc="Processing batches"):
+            batch = self.interactions[i:i + batch_size]
+            futures: dict[Future, Interaction] = {}
+            
+            # Submit all requests in current batch
+            with ThreadPoolExecutor(max_workers=min(batch_size, len(batch))) as executor:
+                for interaction in batch:
+                    request = copy.deepcopy(interaction.request)
+                    futures[executor.submit(model, request)] = interaction
+                
+                # Wait for all futures in this batch to complete
+                batch_interactions_with_answers = []
+                for future in tqdm(
+                    as_completed(futures),
+                    total=len(batch),
+                    desc=f"Batch {i//batch_size + 1}",
+                    leave=False
+                ):
+                    interaction = futures[future]
+                    interaction.model_answer = future.result()
+                    batch_interactions_with_answers.append(interaction)
+            
+            # Add completed batch to results
+            all_interactions_with_answers.extend(batch_interactions_with_answers)
+        
+        self.interactions = all_interactions_with_answers
 
     def compute_metrics(self):
         """Computes metrics for each interaction."""
